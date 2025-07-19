@@ -8,38 +8,81 @@ const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 const { v4: uuidv4 } = require('uuid');
+const winston = require('winston');
 require('dotenv').config();
 
-// Import multi-agent system components
-const AgentOrchestrator = require('./agents/orchestrator');
-const JobManager = require('./middleware/job-manager');
-const AgentHealthMonitor = require('./middleware/health-monitor');
-const DatabaseManager = require('./utils/database-manager');
+// Import enhanced system processors
+const EnhancedDocumentProcessor = require('./processors/enhanced-document-processor');
+const LayoutDetector = require('./processors/layout-detector');
+const PriceExtractionEngine = require('./processors/price-extraction-engine');
+const TemplateManager = require('./processors/template-manager');
+const AudicoEnhancedSystem = require('./audico-enhanced-system');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Initialize multi-agent system
-const agentOrchestrator = new AgentOrchestrator({
+// Configure Winston logger
+const logger = winston.createLogger({
+    level: process.env.LOG_LEVEL || 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+    ),
+    defaultMeta: { service: 'audico-enhanced-backend' },
+    transports: [
+        new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+        new winston.transports.File({ filename: 'logs/combined.log' })
+    ],
+});
+
+if (process.env.NODE_ENV !== 'production') {
+    logger.add(new winston.transports.Console({
+        format: winston.format.simple()
+    }));
+}
+
+// Initialize Enhanced System
+const enhancedSystem = new AudicoEnhancedSystem({
     openaiApiKey: process.env.OPENAI_API_KEY,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseKey: process.env.SUPABASE_KEY,
-    enableFallback: true // Enable fallback to legacy processing
+    enableFallback: true,
+    logger: logger
 });
 
-const jobManager = new JobManager();
-const healthMonitor = new AgentHealthMonitor();
-const dbManager = new DatabaseManager();
+// Initialize individual processors for legacy compatibility
+const documentProcessor = new EnhancedDocumentProcessor({
+    logger: logger,
+    enableOCR: process.env.ENABLE_OCR === 'true'
+});
+
+const layoutDetector = new LayoutDetector({
+    logger: logger,
+    confidenceThreshold: parseFloat(process.env.LAYOUT_CONFIDENCE_THRESHOLD) || 0.7
+});
+
+const priceExtractor = new PriceExtractionEngine({
+    logger: logger,
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    confidenceThreshold: parseFloat(process.env.PRICE_CONFIDENCE_THRESHOLD) || 0.8
+});
+
+const templateManager = new TemplateManager({
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseKey: process.env.SUPABASE_KEY,
+    logger: logger
+});
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:5500', 'http://127.0.0.1:5500', 'http://localhost:3000'],
+    origin: ['http://localhost:5500', 'http://127.0.0.1:5500', 'http://localhost:3000', 'https://tusxfkkg.gensparkspace.com'],
     credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
-// Multer configuration for file uploads
+// Enhanced Multer configuration
 const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
@@ -50,12 +93,13 @@ const upload = multer({
         const allowedTypes = [
             'application/pdf',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/vnd.ms-excel'
+            'application/vnd.ms-excel',
+            'text/csv'
         ];
         if (allowedTypes.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error('Invalid file type. Only PDF and Excel files are allowed.'));
+            cb(new Error(`Invalid file type: ${file.mimetype}. Only PDF, Excel, and CSV files are allowed.`));
         }
     }
 });
@@ -71,400 +115,323 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-// Legacy processing functions (preserved for fallback)
-async function legacyProcessFile(fileBuffer, filename, supplier, options) {
-    console.log('🔄 Using legacy processing for:', filename);
-
+// Health check and system status
+app.get('/', async (req, res) => {
     try {
-        let products = [];
-
-        if (filename.toLowerCase().endsWith('.pdf')) {
-            const pdfData = await pdfParse(fileBuffer);
-            products = await parsePDFProducts(pdfData.text, supplier);
-        } else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) {
-            const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-            products = await parseExcelProducts(workbook, supplier);
-        }
-
-        // Apply pricing logic
-        products = applyPricingLogic(products, options);
-
-        // Categorize with AI if enabled
-        if (options.enableAI) {
-            products = await categorizeProductsLegacy(products);
-        }
-
-        return {
-            success: true,
-            products: products,
-            processingMethod: 'legacy',
-            extractedCount: products.length
-        };
-    } catch (error) {
-        console.error('Legacy processing error:', error);
-        throw error;
-    }
-}
-
-// Legacy PDF parsing function
-async function parsePDFProducts(text, supplier) {
-    const products = [];
-    const lines = text.split('\n').filter(line => line.trim().length > 0);
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-
-        // Enhanced price detection - prioritize "New RRP"
-        const newRRPMatch = line.match(/New\s+RRP[:\s]*R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i);
-        const oldRRPMatch = line.match(/Old\s+RRP[:\s]*R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i);
-        const generalPriceMatch = line.match(/R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
-
-        let priceMatch = newRRPMatch || oldRRPMatch || generalPriceMatch;
-
-        if (priceMatch) {
-            const productName = line.substring(0, line.indexOf(priceMatch[0])).trim();
-            if (productName.length > 5) {
-                const price = parseFloat(priceMatch[1].replace(/,/g, ''));
-
-                products.push({
-                    name: productName,
-                    price: price,
-                    supplier: supplier,
-                    description: productName,
-                    specifications: '',
-                    category: 'uncategorized',
-                    priceType: newRRPMatch ? 'New RRP' : (oldRRPMatch ? 'Old RRP' : 'Standard')
-                });
-            }
-        }
-    }
-
-    return products;
-}
-
-// Legacy Excel parsing function
-async function parseExcelProducts(workbook, supplier) {
-    const products = [];
-
-    for (const sheetName of workbook.SheetNames) {
-        const worksheet = workbook.Sheets[sheetName];
-        const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-        if (data.length < 2) continue;
-
-        // Find header row
-        let headerRow = 0;
-        for (let i = 0; i < Math.min(5, data.length); i++) {
-            const row = data[i];
-            if (row.some(cell => 
-                typeof cell === 'string' && 
-                (cell.toLowerCase().includes('product') || 
-                 cell.toLowerCase().includes('name') || 
-                 cell.toLowerCase().includes('description'))
-            )) {
-                headerRow = i;
-                break;
-            }
-        }
-
-        const headers = data[headerRow] || [];
-
-        // Find column indices with priority for "New RRP"
-        const nameCol = headers.findIndex(h => 
-            typeof h === 'string' && 
-            (h.toLowerCase().includes('product') || 
-             h.toLowerCase().includes('name') || 
-             h.toLowerCase().includes('description'))
-        );
-
-        const newRRPCol = headers.findIndex(h => 
-            typeof h === 'string' && h.toLowerCase().includes('new') && h.toLowerCase().includes('rrp')
-        );
-
-        const oldRRPCol = headers.findIndex(h => 
-            typeof h === 'string' && h.toLowerCase().includes('old') && h.toLowerCase().includes('rrp')
-        );
-
-        const priceCol = headers.findIndex(h => 
-            typeof h === 'string' && 
-            (h.toLowerCase().includes('price') || h.toLowerCase().includes('rrp'))
-        );
-
-        // Prioritize New RRP over Old RRP over general price
-        const selectedPriceCol = newRRPCol >= 0 ? newRRPCol : (oldRRPCol >= 0 ? oldRRPCol : priceCol);
-
-        // Parse data rows
-        for (let i = headerRow + 1; i < data.length; i++) {
-            const row = data[i];
-            if (!row || row.length === 0) continue;
-
-            const name = nameCol >= 0 ? row[nameCol] : row[0];
-            const price = selectedPriceCol >= 0 ? row[selectedPriceCol] : row[1];
-
-            if (name && price && typeof name === 'string' && name.length > 2) {
-                const numericPrice = typeof price === 'number' ? price : parseFloat(String(price).replace(/[^0-9.]/g, ''));
-
-                if (!isNaN(numericPrice) && numericPrice > 0) {
-                    products.push({
-                        name: name.trim(),
-                        price: numericPrice,
-                        supplier: supplier,
-                        description: name.trim(),
-                        specifications: '',
-                        category: 'uncategorized',
-                        priceType: newRRPCol >= 0 ? 'New RRP' : (oldRRPCol >= 0 ? 'Old RRP' : 'Standard'),
-                        sheet: sheetName
-                    });
+        const systemHealth = await enhancedSystem.getSystemHealth();
+        res.json({ 
+            message: '🎵 Audico Enhanced Backend Server is running!',
+            status: 'online',
+            timestamp: new Date().toISOString(),
+            version: '2.0.0-enhanced',
+            system: {
+                health: systemHealth,
+                processors: {
+                    documentProcessor: documentProcessor.isHealthy(),
+                    layoutDetector: layoutDetector.isHealthy(),
+                    priceExtractor: priceExtractor.isHealthy(),
+                    templateManager: templateManager.isHealthy()
                 }
+            },
+            endpoints: {
+                upload: '/api/upload',
+                uploadAsync: '/api/upload-async',
+                jobs: '/api/jobs',
+                test: '/api/test',
+                products: '/api/products',
+                system: '/api/system/status',
+                templates: '/api/templates',
+                suppliers: '/api/suppliers'
             }
-        }
+        });
+    } catch (error) {
+        logger.error('Health check failed:', error);
+        res.status(500).json({
+            message: 'System health check failed',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
-
-    return products;
-}
-
-// Legacy pricing logic
-function applyPricingLogic(products, options) {
-    return products.map(product => {
-        let finalPrice = product.price;
-
-        switch (options.priceType) {
-            case 'retail_including_vat':
-                break;
-            case 'cost_including_vat':
-                finalPrice = finalPrice * (1 + (options.marginPercentage || 0) / 100);
-                break;
-            case 'cost_excluding_vat':
-                finalPrice = finalPrice * (1 + (options.vatRate || 15) / 100);
-                finalPrice = finalPrice * (1 + (options.marginPercentage || 0) / 100);
-                break;
-        }
-
-        return {
-            ...product,
-            original_price: product.price,
-            final_price: Math.round(finalPrice * 100) / 100
-        };
-    });
-}
-
-// Legacy AI categorization
-async function categorizeProductsLegacy(products) {
-    const categorizedProducts = [];
-
-    for (const product of products) {
-        try {
-            const prompt = `
-                Analyze this audio product and categorize it into one of these categories:
-                - home: Residential audio, hi-fi, stereo systems, home theater
-                - business: Office, commercial, conference room audio
-                - restaurant: Restaurant, bar, cafe, hospitality audio
-                - gym: Fitness, sports, workout facility audio
-                - worship: Church, religious venue audio systems
-                - education: School, classroom, university audio
-                - club: Entertainment venues, nightclub, event audio
-
-                Product: ${product.name}
-                Description: ${product.description}
-
-                Respond with only the category name (lowercase).
-            `;
-
-            const response = await openai.chat.completions.create({
-                model: 'gpt-3.5-turbo',
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: 50,
-                temperature: 0.1
-            });
-
-            const category = response.choices[0].message.content.trim().toLowerCase();
-            const validCategories = ['home', 'business', 'restaurant', 'gym', 'worship', 'education', 'club'];
-            product.category = validCategories.includes(category) ? category : 'home';
-
-            categorizedProducts.push(product);
-
-            // Small delay to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-        } catch (error) {
-            console.error(`Error categorizing product ${product.name}:`, error);
-            product.category = 'home';
-            categorizedProducts.push(product);
-        }
-    }
-
-    return categorizedProducts;
-}
-
-// Root route
-app.get('/', (req, res) => {
-    res.json({ 
-        message: '🎵 Audico Enhanced Backend Server is running!',
-        status: 'online',
-        timestamp: new Date().toISOString(),
-        version: '2.0.0-multi-agent',
-        agents: {
-            orchestrator: agentOrchestrator.isHealthy(),
-            jobManager: jobManager.isHealthy(),
-            healthMonitor: healthMonitor.getStatus()
-        },
-        endpoints: {
-            upload: '/api/upload',
-            uploadAsync: '/api/upload-async',
-            jobs: '/api/jobs',
-            test: '/api/test',
-            products: '/api/products',
-            agents: '/api/agents/status'
-        }
-    });
 });
 
-// Test endpoint
-app.get('/api/test', (req, res) => {
-    res.json({ 
-        message: 'Backend connection successful!',
-        timestamp: new Date().toISOString(),
-        database: 'Connected to Supabase',
-        ai: 'OpenAI API configured',
-        agents: {
-            status: 'Multi-agent system ready',
-            orchestrator: agentOrchestrator.isHealthy(),
-            fallback: 'Legacy processing available'
-        }
-    });
-});
-
-// Agent status endpoint
-app.get('/api/agents/status', async (req, res) => {
+// Enhanced test endpoint
+app.get('/api/test', async (req, res) => {
     try {
-        const status = await healthMonitor.getDetailedStatus();
+        // Test database connection
+        const { data: testQuery, error: dbError } = await supabase
+            .from('products')
+            .select('id')
+            .limit(1);
+
+        // Test OpenAI connection
+        let aiStatus = 'connected';
+        try {
+            await openai.models.list();
+        } catch (aiError) {
+            aiStatus = 'error';
+            logger.warn('OpenAI connection test failed:', aiError.message);
+        }
+
+        res.json({ 
+            message: 'Enhanced backend connection successful!',
+            timestamp: new Date().toISOString(),
+            tests: {
+                database: dbError ? 'error' : 'connected',
+                ai: aiStatus,
+                enhancedSystem: enhancedSystem.isHealthy() ? 'ready' : 'initializing',
+                processors: {
+                    document: documentProcessor.isHealthy(),
+                    layout: layoutDetector.isHealthy(),
+                    price: priceExtractor.isHealthy(),
+                    template: templateManager.isHealthy()
+                }
+            },
+            configuration: {
+                enableMultiAgent: process.env.ENABLE_MULTI_AGENT === 'true',
+                enableFallback: process.env.ENABLE_FALLBACK === 'true',
+                maxConcurrentJobs: process.env.MAX_CONCURRENT_JOBS || 5,
+                logLevel: process.env.LOG_LEVEL || 'info'
+            }
+        });
+    } catch (error) {
+        logger.error('Test endpoint failed:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Enhanced system status endpoint
+app.get('/api/system/status', async (req, res) => {
+    try {
+        const status = await enhancedSystem.getDetailedStatus();
         res.json(status);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        logger.error('System status check failed:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
-// Get products endpoint (unchanged)
+// Get products endpoint (enhanced)
 app.get('/api/products', async (req, res) => {
     try {
-        const { data: products, error } = await supabase
+        const { supplier, category, limit = 100, offset = 0 } = req.query;
+        
+        let query = supabase
             .from('products')
             .select('*')
-            .order('created_at', { ascending: false })
-            .limit(100);
+            .order('created_at', { ascending: false });
 
-        if (error) {
-            return res.status(500).json({ error: error.message });
+        if (supplier) {
+            query = query.eq('supplier', supplier);
+        }
+        
+        if (category) {
+            query = query.eq('category', category);
         }
 
-        res.json(products);
+        const { data: products, error, count } = await query
+            .range(offset, offset + parseInt(limit) - 1);
+
+        if (error) {
+            throw error;
+        }
+
+        res.json({
+            products: products || [],
+            pagination: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: count
+            },
+            timestamp: new Date().toISOString()
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        logger.error('Products fetch error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
-// Enhanced synchronous upload endpoint (maintains backward compatibility)
+// Enhanced synchronous upload endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
+    const startTime = Date.now();
+    let processingMethod = 'unknown';
+    
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
-        const { supplier, priceType, vatRate, marginPercentage, enableAI, useAgents = 'true' } = req.body;
-
-        console.log('📁 Processing file:', req.file.originalname);
-        console.log('🤖 Use agents:', useAgents);
+        const { supplier, priceType, vatRate, marginPercentage, enableAI, useEnhanced = 'true' } = req.body;
+        
+        logger.info(`Processing file: ${req.file.originalname}, supplier: ${supplier}, size: ${req.file.size} bytes`);
 
         let result;
-
-        // Try multi-agent processing first (if enabled)
-        if (useAgents === 'true' && agentOrchestrator.isHealthy()) {
+        
+        // Use enhanced system if enabled and healthy
+        if (useEnhanced === 'true' && enhancedSystem.isHealthy()) {
             try {
-                console.log('🚀 Using multi-agent processing...');
-
-                result = await agentOrchestrator.processFile({
+                logger.info('Using enhanced processing system...');
+                
+                result = await enhancedSystem.processFile({
                     fileBuffer: req.file.buffer,
                     filename: req.file.originalname,
                     supplier: supplier,
                     options: {
-                        priceType,
+                        priceType: priceType || 'cost_including_vat',
                         vatRate: parseFloat(vatRate) || 15,
                         marginPercentage: parseFloat(marginPercentage) || 0,
                         enableAI: enableAI === 'true'
                     }
                 });
 
-                result.processingMethod = 'multi-agent';
-
-            } catch (agentError) {
-                console.warn('⚠️ Multi-agent processing failed, falling back to legacy:', agentError.message);
-
-                // Fallback to legacy processing
-                result = await legacyProcessFile(req.file.buffer, req.file.originalname, supplier, {
+                processingMethod = 'enhanced';
+                
+            } catch (enhancedError) {
+                logger.warn('Enhanced processing failed, falling back to legacy:', enhancedError.message);
+                
+                // Fallback to individual processors
+                result = await fallbackProcessing(req.file, supplier, {
                     priceType,
                     vatRate: parseFloat(vatRate) || 15,
                     marginPercentage: parseFloat(marginPercentage) || 0,
                     enableAI: enableAI === 'true'
                 });
+                
+                processingMethod = 'fallback';
             }
         } else {
-            // Use legacy processing directly
-            result = await legacyProcessFile(req.file.buffer, req.file.originalname, supplier, {
+            // Use individual processors directly
+            logger.info('Using individual processors...');
+            result = await fallbackProcessing(req.file, supplier, {
                 priceType,
                 vatRate: parseFloat(vatRate) || 15,
                 marginPercentage: parseFloat(marginPercentage) || 0,
                 enableAI: enableAI === 'true'
             });
+            
+            processingMethod = 'individual';
         }
 
-        // Save products to database
+        // Save products to database if processing was successful
         if (result.products && result.products.length > 0) {
             const productsToInsert = result.products.map(product => ({
                 id: uuidv4(),
-                name: product.name,
-                description: product.description,
+                name: product.name || 'Unknown Product',
+                description: product.description || product.name || '',
                 specifications: product.specifications || '',
-                supplier: product.supplier,
-                category: product.category,
-                original_price: product.original_price || product.price,
-                final_price: product.final_price || product.price,
+                supplier: product.supplier || supplier,
+                category: product.category || 'uncategorized',
+                original_price: product.original_price || product.price || 0,
+                final_price: product.final_price || product.price || 0,
                 price_type: product.priceType || 'Standard',
-                processing_method: result.processingMethod,
+                confidence_score: product.confidence || 0,
+                processing_method: processingMethod,
+                layout_type: result.layoutType || 'unknown',
+                extraction_quality: result.qualityScore || 0,
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             }));
 
-            const { data: insertedProducts, error } = await supabase
+            const { data: insertedProducts, error: insertError } = await supabase
                 .from('products')
                 .insert(productsToInsert);
 
-            if (error) {
-                console.error('Database error:', error);
-                return res.status(500).json({ error: 'Database error: ' + error.message });
+            if (insertError) {
+                logger.error('Database insertion error:', insertError);
+                // Continue processing but log the error
             }
         }
 
+        const processingTime = Date.now() - startTime;
+        
+        logger.info(`File processing completed in ${processingTime}ms using ${processingMethod} method`);
+
         res.json({
             success: true,
-            message: `Successfully processed ${result.products.length} products using ${result.processingMethod} processing`,
+            message: `Successfully processed ${result.products.length} products using ${processingMethod} processing`,
             products: result.products.slice(0, 10), // Return first 10 for preview
             totalCount: result.products.length,
-            processingMethod: result.processingMethod,
+            processingMethod: processingMethod,
+            layoutType: result.layoutType,
             extractionQuality: result.qualityScore || 'N/A',
-            timestamp: new Date().toISOString()
+            confidenceScore: result.averageConfidence || 'N/A',
+            processingTimeMs: processingTime,
+            timestamp: new Date().toISOString(),
+            statistics: {
+                totalProducts: result.products.length,
+                validProducts: result.products.filter(p => p.price > 0).length,
+                averagePrice: result.products.length > 0 
+                    ? result.products.reduce((sum, p) => sum + (p.final_price || p.price || 0), 0) / result.products.length 
+                    : 0
+            }
         });
 
     } catch (error) {
-        console.error('Upload error:', error);
+        const processingTime = Date.now() - startTime;
+        logger.error('Upload processing error:', error);
+        
         res.status(500).json({ 
             error: error.message,
-            processingMethod: 'failed',
-            timestamp: new Date().toISOString()
+            processingMethod: processingMethod,
+            processingTimeMs: processingTime,
+            timestamp: new Date().toISOString(),
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 });
 
-// New asynchronous upload endpoint
+// Fallback processing function using individual processors
+async function fallbackProcessing(file, supplier, options) {
+    try {
+        // Step 1: Detect layout
+        const layoutInfo = await layoutDetector.detectLayout(file.buffer, file.originalname);
+        
+        // Step 2: Process document
+        const documentResult = await documentProcessor.processDocument(
+            file.buffer, 
+            file.originalname, 
+            layoutInfo
+        );
+        
+        // Step 3: Extract prices
+        const extractionResult = await priceExtractor.extractPrices(
+            documentResult.extractedText,
+            documentResult.structuredData,
+            {
+                supplier: supplier,
+                layoutType: layoutInfo.type,
+                ...options
+            }
+        );
+        
+        // Step 4: Learn from successful extraction
+        if (extractionResult.products.length > 0) {
+            await templateManager.learnFromExtraction(supplier, layoutInfo, extractionResult);
+        }
+        
+        return {
+            products: extractionResult.products,
+            layoutType: layoutInfo.type,
+            qualityScore: extractionResult.confidence,
+            averageConfidence: extractionResult.averageConfidence,
+            processingMethod: 'fallback'
+        };
+        
+    } catch (error) {
+        logger.error('Fallback processing failed:', error);
+        throw error;
+    }
+}
+
+// Asynchronous upload endpoint
 app.post('/api/upload-async', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
@@ -472,40 +439,39 @@ app.post('/api/upload-async', upload.single('file'), async (req, res) => {
         }
 
         const { supplier, priceType, vatRate, marginPercentage, enableAI } = req.body;
+        const jobId = uuidv4();
+        
+        logger.info(`Starting async processing for job: ${jobId}, file: ${req.file.originalname}`);
 
-        // Create a job for asynchronous processing
-        const jobId = await jobManager.createJob({
-            type: 'file_processing',
+        // Start processing asynchronously using enhanced system
+        enhancedSystem.processFileAsync(jobId, {
             fileBuffer: req.file.buffer,
             filename: req.file.originalname,
             supplier: supplier,
             options: {
-                priceType,
+                priceType: priceType || 'cost_including_vat',
                 vatRate: parseFloat(vatRate) || 15,
                 marginPercentage: parseFloat(marginPercentage) || 0,
                 enableAI: enableAI === 'true'
             }
+        }).catch(error => {
+            logger.error(`Async processing failed for job ${jobId}:`, error);
         });
-
-        // Start processing asynchronously
-        agentOrchestrator.processFileAsync(jobId)
-            .then(result => {
-                jobManager.completeJob(jobId, result);
-            })
-            .catch(error => {
-                jobManager.failJob(jobId, error);
-            });
 
         res.json({
             success: true,
             jobId: jobId,
             message: 'File processing started. Use /api/jobs/{jobId} to check status.',
-            estimatedTime: '2-5 minutes'
+            estimatedTime: '2-5 minutes',
+            timestamp: new Date().toISOString()
         });
 
     } catch (error) {
-        console.error('Async upload error:', error);
-        res.status(500).json({ error: error.message });
+        logger.error('Async upload error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -513,68 +479,251 @@ app.post('/api/upload-async', upload.single('file'), async (req, res) => {
 app.get('/api/jobs/:jobId', async (req, res) => {
     try {
         const { jobId } = req.params;
-        const job = await jobManager.getJob(jobId);
+        const job = await enhancedSystem.getJobStatus(jobId);
 
         if (!job) {
-            return res.status(404).json({ error: 'Job not found' });
+            return res.status(404).json({ 
+                error: 'Job not found',
+                jobId: jobId,
+                timestamp: new Date().toISOString()
+            });
         }
 
-        res.json(job);
+        res.json({
+            ...job,
+            timestamp: new Date().toISOString()
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        logger.error('Job status error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
 // Get all jobs endpoint
 app.get('/api/jobs', async (req, res) => {
     try {
-        const jobs = await jobManager.getAllJobs();
-        res.json(jobs);
+        const { status, limit = 50 } = req.query;
+        const jobs = await enhancedSystem.getJobs({ status, limit: parseInt(limit) });
+        
+        res.json({
+            jobs: jobs,
+            count: jobs.length,
+            timestamp: new Date().toISOString()
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        logger.error('Jobs list error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Template management endpoints
+app.get('/api/templates', async (req, res) => {
+    try {
+        const { supplier } = req.query;
+        const templates = await templateManager.getTemplates(supplier);
+        
+        res.json({
+            templates: templates,
+            count: templates.length,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Templates fetch error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+app.post('/api/templates', async (req, res) => {
+    try {
+        const template = await templateManager.createTemplate(req.body);
+        
+        res.json({
+            success: true,
+            template: template,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Template creation error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Supplier management endpoints
+app.get('/api/suppliers', async (req, res) => {
+    try {
+        const { data: suppliers, error } = await supabase
+            .from('products')
+            .select('supplier')
+            .not('supplier', 'is', null);
+
+        if (error) throw error;
+
+        // Get unique suppliers with product counts
+        const supplierCounts = {};
+        suppliers.forEach(item => {
+            if (item.supplier) {
+                supplierCounts[item.supplier] = (supplierCounts[item.supplier] || 0) + 1;
+            }
+        });
+
+        const supplierList = Object.keys(supplierCounts).map(supplier => ({
+            name: supplier,
+            productCount: supplierCounts[supplier]
+        })).sort((a, b) => b.productCount - a.productCount);
+
+        res.json({
+            suppliers: supplierList,
+            totalSuppliers: supplierList.length,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Suppliers fetch error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// System statistics endpoint
+app.get('/api/stats', async (req, res) => {
+    try {
+        const stats = await enhancedSystem.getSystemStatistics();
+        res.json({
+            ...stats,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Statistics fetch error:', error);
+        res.status(500).json({ 
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-    console.error('Server error:', error.stack);
+    logger.error('Server error:', {
+        message: error.message,
+        stack: error.stack,
+        url: req.url,
+        method: req.method
+    });
 
     if (error instanceof multer.MulterError) {
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
+            return res.status(400).json({ 
+                error: 'File too large. Maximum size is 50MB.',
+                code: 'FILE_TOO_LARGE',
+                timestamp: new Date().toISOString()
+            });
         }
+        
+        return res.status(400).json({ 
+            error: `File upload error: ${error.message}`,
+            code: error.code,
+            timestamp: new Date().toISOString()
+        });
     }
 
     res.status(500).json({ 
-        error: 'Something went wrong!',
-        message: error.message,
+        error: 'Internal server error',
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong!',
         timestamp: new Date().toISOString()
+    });
+});
+
+// Handle 404 routes
+app.use('*', (req, res) => {
+    res.status(404).json({
+        error: 'Route not found',
+        path: req.originalUrl,
+        method: req.method,
+        timestamp: new Date().toISOString(),
+        availableEndpoints: [
+            'GET /',
+            'GET /api/test',
+            'GET /api/products',
+            'POST /api/upload',
+            'POST /api/upload-async',
+            'GET /api/jobs',
+            'GET /api/system/status',
+            'GET /api/templates',
+            'GET /api/suppliers',
+            'GET /api/stats'
+        ]
     });
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-    console.log('🛑 Shutting down gracefully...');
+    logger.info('Received SIGTERM, shutting down gracefully...');
+    
+    try {
+        await enhancedSystem.shutdown();
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+    }
+});
 
-    // Stop accepting new requests
-    server.close(() => {
-        console.log('✅ HTTP server closed');
-    });
-
-    // Cleanup agents
-    await agentOrchestrator.shutdown();
-    await jobManager.shutdown();
-    await healthMonitor.shutdown();
-
-    process.exit(0);
+process.on('SIGINT', async () => {
+    logger.info('Received SIGINT, shutting down gracefully...');
+    
+    try {
+        await enhancedSystem.shutdown();
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+    }
 });
 
 // Start server
 const server = app.listen(PORT, () => {
-    console.log(`🎵 Audico Enhanced Backend Server running on http://localhost:${PORT}`);
-    console.log(`📊 Visit http://localhost:${PORT} to test`);
-    console.log(`🤖 Multi-agent system: ${agentOrchestrator.isHealthy() ? 'Ready' : 'Initializing'}`);
-    console.log(`📁 Environment variables loaded successfully`);
+    logger.info(`🎵 Audico Enhanced Backend Server running on http://localhost:${PORT}`);
+    logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`🤖 Enhanced system: ${enhancedSystem.isHealthy() ? 'Ready' : 'Initializing'}`);
+    logger.info(`📁 Log level: ${process.env.LOG_LEVEL || 'info'}`);
+    logger.info(`🔄 Max concurrent jobs: ${process.env.MAX_CONCURRENT_JOBS || 5}`);
+    
+    console.log(`
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                🎵 AUDICO ENHANCED BACKEND                    ║
+    ║                                                              ║
+    ║  🌐 Server: http://localhost:${PORT}                            ║
+    ║  📊 Status: http://localhost:${PORT}/api/test                   ║
+    ║  📁 Upload: http://localhost:${PORT}/api/upload                 ║
+    ║  🔍 Products: http://localhost:${PORT}/api/products             ║
+    ║                                                              ║
+    ║  🚀 Enhanced processors ready for 50+ pricelist formats     ║
+    ╚══════════════════════════════════════════════════════════════╝
+    `);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception:', error);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    process.exit(1);
 });
 
 module.exports = app;
