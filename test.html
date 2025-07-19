@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audico Enhanced Backend - File Upload Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+        form { border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+        label { display: block; margin: 10px 0 5px 0; font-weight: bold; }
+        input, select { width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box; }
+        input[type="submit"] { background: #007cba; color: white; border: none; padding: 12px; cursor: pointer; }
+        input[type="submit"]:hover { background: #005a87; }
+        .form-group { margin-bottom: 15px; }
+        .help-text { font-size: 12px; color: #666; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h2>🎯 Test Your Enhanced Audico System</h2>
+    <p>Upload your pricelist with cost calculation settings:</p>
+    
+    <form action="http://localhost:3000/api/upload" method="post" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="file">Select your pricelist file:</label>
+            <input type="file" id="file" name="file" accept=".pdf,.xlsx,.xls" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="supplier">Supplier:</label>
+            <select id="supplier" name="supplier">
+                <option value="Denon" selected>Denon</option>
+                <option value="Mission">Mission</option>
+                <option value="Nology">Nology</option>
+                <option value="Proaudio">Proaudio</option>
+                <option value="Polk">Polk</option>
+                <option value="Marantz">Marantz</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="priceType">Price Type in File:</label>
+            <select id="priceType" name="priceType">
+                <option value="retail_including_vat">Retail Including VAT</option>
+                <option value="cost_including_vat" selected>Cost Including VAT</option>
+                <option value="cost_excluding_vat">Cost Excluding VAT</option>
+            </select>
+            <div class="help-text">What type of prices are in your pricelist file?</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="vatRate">VAT Rate (%):</label>
+            <input type="number" id="vatRate" name="vatRate" value="15" min="0" max="30" step="0.1">
+            <div class="help-text">VAT percentage (e.g., 15 for 15%)</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="marginPercentage">Markup Percentage (%):</label>
+            <input type="number" id="marginPercentage" name="marginPercentage" value="25" min="0" max="100" step="0.1">
+            <div class="help-text">Your markup percentage for quotes (e.g., 25 for 25% markup)</div>
+        </div>
+        
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="enableAI" value="true" checked>
+                Enable AI Categorization
+            </label>
+        </div>
+        
+        <input type="submit" value="🚀 Upload & Process with Cost Calculation">
+    </form>
+    
+    <div style="margin-top: 30px; padding: 15px; background: #f5f5f5; border-radius: 5px;">
+        <h3>💡 Cost Calculation Examples:</h3>
+        <ul>
+            <li><strong>Cost Including VAT + 25% Markup:</strong><br>
+                Cost: R1000 → Quote Price: R1250</li>
+            <li><strong>Cost Excluding VAT + VAT + 25% Markup:</strong><br>
+                Cost: R1000 → +VAT: R1150 → +Markup: R1437.50</li>
+            <li><strong>Retail Price (no markup needed):</strong><br>
+                Retail: R1500 → Quote Price: R1500</li>
+        </ul>
+        
+        <h3>🎯 For N8N Tender Bot:</h3>
+        <p>The system will calculate <strong>cost_price</strong> which your N8N bot can use as:<br>
+        <code>quote_price = cost_price + 10%</code></p>
+    </div>
+</body>
+</html>
