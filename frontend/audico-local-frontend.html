@@ -1,0 +1,513 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audico Enhanced Quoting System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 30px;
+            min-height: 100vh;
+        }
+        
+        .chat-section {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        
+        .quote-section {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            background: #f8f9fa;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .tab.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .chat-area {
+            min-height: 400px;
+            border: 2px solid #e9ecef;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            overflow-y: auto;
+            background: #f8f9fa;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 15px;
+            max-width: 80%;
+        }
+        
+        .bot-message {
+            background: #e3f2fd;
+            margin-right: auto;
+        }
+        
+        .user-message {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            outline: none;
+            font-size: 16px;
+        }
+        
+        .send-btn {
+            padding: 15px 30px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        
+        .upload-section {
+            margin-top: 30px;
+            padding: 20px;
+            border: 2px dashed #667eea;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .quote-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .quote-items {
+            margin-bottom: 30px;
+        }
+        
+        .quote-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .quote-total {
+            border-top: 2px solid #667eea;
+            padding-top: 20px;
+            text-align: right;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        
+        .quote-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .action-btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .pdf-btn { background: #dc3545; color: white; }
+        .email-btn { background: #28a745; color: white; }
+        .cart-btn { background: #ffc107; color: #333; }
+        
+        .status-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-weight: 500;
+            z-index: 1000;
+        }
+        
+        .status-connected { background: #28a745; color: white; }
+        .status-disconnected { background: #dc3545; color: white; }
+    </style>
+</head>
+<body>
+    <div class="status-indicator" id="status">Connecting...</div>
+    
+    <div class="container">
+        <div class="chat-section">
+            <div class="tabs">
+                <button class="tab active" data-tab="home">Home</button>
+                <button class="tab" data-tab="business">Business</button>
+                <button class="tab" data-tab="restaurant">Restaurant</button>
+                <button class="tab" data-tab="gym">Gym</button>
+                <button class="tab" data-tab="worship">Worship</button>
+                <button class="tab" data-tab="education">Education</button>
+                <button class="tab" data-tab="club">Club</button>
+                <button class="tab" data-tab="tender">Tender</button>
+            </div>
+            
+            <div class="chat-area" id="chatArea">
+                <div class="message bot-message">
+                    <strong>🏠 Home Audio Assistant</strong><br>
+                    Hi! I'm here to help you create the perfect home audio-visual system. 
+                    To get started, could you tell me how many rooms you'd like audio in?
+                </div>
+            </div>
+            
+            <div class="input-area">
+                <input type="text" class="chat-input" id="chatInput" placeholder="Type your message...">
+                <button class="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+            
+            <div class="upload-section">
+                <h3>📁 Upload Pricelist</h3>
+                <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls" style="display: none;">
+                <button onclick="document.getElementById('fileInput').click()" class="action-btn pdf-btn">Choose File</button>
+                <div style="margin-top: 10px;">
+                    <select id="supplierSelect" style="margin-right: 10px; padding: 8px;">
+                        <option value="Denon">Denon</option>
+                        <option value="Mission">Mission</option>
+                        <option value="Nology">Nology</option>
+                        <option value="Proaudio">Proaudio</option>
+                        <option value="Polk">Polk</option>
+                        <option value="Marantz">Marantz</option>
+                    </select>
+                    <button onclick="uploadFile()" class="action-btn email-btn">Upload & Process</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="quote-section">
+            <div class="quote-header">
+                <h2>🎵 Live Quote</h2>
+                <p>Real-time system builder</p>
+            </div>
+            
+            <div class="quote-items" id="quoteItems">
+                <div class="quote-item">
+                    <span>No items added yet</span>
+                </div>
+            </div>
+            
+            <div class="quote-total">
+                <div>Total: R<span id="quoteTotal">0.00</span></div>
+            </div>
+            
+            <div class="quote-actions">
+                <button class="action-btn pdf-btn" onclick="generatePDF()">PDF</button>
+                <button class="action-btn email-btn" onclick="emailQuote()">Email</button>
+                <button class="action-btn cart-btn" onclick="addToCart()">Add to Cart</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'http://localhost:3000/api';
+        let currentTab = 'home';
+        let quoteItems = [];
+        let quoteTotal = 0;
+
+        // Tab messages
+        const tabMessages = {
+            home: "Hi! I'm here to help you create the perfect home audio-visual system. To get started, could you tell me how many rooms you'd like audio in?",
+            business: "Hello! I'll help you design professional business audio systems. What type of business environment are we designing for?",
+            restaurant: "Welcome! I specialize in restaurant audio atmospheres. How large is your restaurant space and what ambiance are you aiming for?",
+            gym: "Hi! Let's create an energizing gym audio system. What's the size of your fitness facility and what zones need audio?",
+            worship: "Greetings! I'll help design worship audio systems. What's the capacity of your worship space and what type of services do you hold?",
+            education: "Hello! I design educational audio systems. What type of learning environment are we setting up - classroom, lecture hall, or multi-purpose?",
+            club: "Hey! Ready to design an amazing club sound system? What's the capacity and style of your venue?",
+            tender: "Hi! I can analyze tender documents and match them to our products. Please paste your tender text or upload the document."
+        };
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            checkBackendConnection();
+            setupEventListeners();
+        });
+
+        // Setup event listeners
+        function setupEventListeners() {
+            // Tab switching
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    switchTab(this.dataset.tab);
+                });
+            });
+
+            // Enter key for chat
+            document.getElementById('chatInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            // File input change
+            document.getElementById('fileInput').addEventListener('change', function() {
+                if (this.files.length > 0) {
+                    document.querySelector('.upload-section h3').textContent = `📁 Selected: ${this.files[0].name}`;
+                }
+            });
+        }
+
+        // Check backend connection
+        async function checkBackendConnection() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/test`);
+                const data = await response.json();
+                updateStatus('connected', 'Connected to Enhanced Backend');
+                console.log('Backend connected:', data);
+            } catch (error) {
+                updateStatus('disconnected', 'Backend Connection Failed');
+                console.error('Backend connection failed:', error);
+            }
+        }
+
+        // Update connection status
+        function updateStatus(status, message) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status-indicator status-${status}`;
+        }
+
+        // Switch tabs
+        function switchTab(tabName) {
+            currentTab = tabName;
+            
+            // Update active tab
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            
+            // Clear chat and show tab message
+            const chatArea = document.getElementById('chatArea');
+            chatArea.innerHTML = `
+                <div class="message bot-message">
+                    <strong>${getTabIcon(tabName)} ${tabName.charAt(0).toUpperCase() + tabName.slice(1)} Assistant</strong><br>
+                    ${tabMessages[tabName]}
+                </div>
+            `;
+        }
+
+        // Get tab icon
+        function getTabIcon(tabName) {
+            const icons = {
+                home: '🏠', business: '🏢', restaurant: '🍽️', gym: '💪',
+                worship: '⛪', education: '🎓', club: '🎵', tender: '📋'
+            };
+            return icons[tabName] || '🎵';
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message to chat
+            addMessageToChat(message, 'user');
+            input.value = '';
+
+            // Simulate bot response (replace with actual AI integration)
+            setTimeout(() => {
+                const botResponse = generateBotResponse(message);
+                addMessageToChat(botResponse, 'bot');
+            }, 1000);
+        }
+
+        // Add message to chat
+        function addMessageToChat(message, sender) {
+            const chatArea = document.getElementById('chatArea');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.innerHTML = sender === 'bot' ? `<strong>Bot:</strong><br>${message}` : message;
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // Generate bot response (placeholder)
+        function generateBotResponse(userMessage) {
+            const responses = {
+                home: [
+                    "Great! For a home setup, I'd recommend starting with the main living areas. Would you prefer ceiling speakers or bookshelf speakers for the lounge?",
+                    "Excellent choice! Let me suggest some products for your home system. How important is wireless connectivity to you?"
+                ],
+                business: [
+                    "Perfect! For business environments, clarity and reliability are key. Do you need background music, paging, or both?",
+                    "I understand. Let me recommend some commercial-grade solutions that would work well for your space."
+                ]
+            };
+            
+            const tabResponses = responses[currentTab] || responses.home;
+            return tabResponses[Math.floor(Math.random() * tabResponses.length)];
+        }
+
+        // Upload file
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const supplierSelect = document.getElementById('supplierSelect');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select a file first');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('supplier', supplierSelect.value);
+            formData.append('priceType', 'cost_including_vat');
+            formData.append('marginPercentage', '25');
+            formData.append('enableAI', 'true');
+
+            try {
+                updateStatus('connected', 'Processing file...');
+                
+                const response = await fetch(`${API_BASE_URL}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus('connected', `Processed ${result.data.totalCount} products`);
+                    addMessageToChat(`✅ File processed successfully! Found ${result.data.totalCount} products using ${result.data.processingMethod} processing.`, 'bot');
+                    
+                    // Add products to quote (first few as examples)
+                    if (result.data.products && result.data.products.length > 0) {
+                        result.data.products.slice(0, 3).forEach(product => {
+                            addToQuote(product.name, product.final_price || product.price);
+                        });
+                    }
+                } else {
+                    updateStatus('disconnected', 'Processing failed');
+                    addMessageToChat(`❌ Processing failed: ${result.error}`, 'bot');
+                }
+            } catch (error) {
+                updateStatus('disconnected', 'Upload failed');
+                addMessageToChat(`❌ Upload failed: ${error.message}`, 'bot');
+                console.error('Upload error:', error);
+            }
+        }
+
+        // Add item to quote
+        function addToQuote(name, price) {
+            const item = { name, price: parseFloat(price), quantity: 1 };
+            quoteItems.push(item);
+            updateQuoteDisplay();
+        }
+
+        // Update quote display
+        function updateQuoteDisplay() {
+            const quoteItemsEl = document.getElementById('quoteItems');
+            const quoteTotalEl = document.getElementById('quoteTotal');
+
+            if (quoteItems.length === 0) {
+                quoteItemsEl.innerHTML = '<div class="quote-item"><span>No items added yet</span></div>';
+                quoteTotalEl.textContent = '0.00';
+                return;
+            }
+
+            quoteItemsEl.innerHTML = quoteItems.map((item, index) => `
+                <div class="quote-item">
+                    <div>
+                        <strong>${item.name}</strong><br>
+                        <small>Qty: ${item.quantity} × R${item.price.toFixed(2)}</small>
+                    </div>
+                    <div>
+                        <strong>R${(item.price * item.quantity).toFixed(2)}</strong>
+                        <button onclick="removeFromQuote(${index})" style="margin-left: 10px; background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 5px;">×</button>
+                    </div>
+                </div>
+            `).join('');
+
+            quoteTotal = quoteItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            quoteTotalEl.textContent = quoteTotal.toFixed(2);
+        }
+
+        // Remove from quote
+        function removeFromQuote(index) {
+            quoteItems.splice(index, 1);
+            updateQuoteDisplay();
+        }
+
+        // Quote actions
+        function generatePDF() {
+            alert('PDF generation would be implemented here');
+        }
+
+        function emailQuote() {
+            alert('Email functionality would be implemented here');
+        }
+
+        function addToCart() {
+            alert('Add to cart functionality would be implemented here');
+        }
+    </script>
+</body>
+</html>
+"@ | Out-File "frontend/audico-local-frontend.html" -Encoding UTF8
+
+Write-Host "✅ Created clean local frontend: frontend/audico-local-frontend.html"

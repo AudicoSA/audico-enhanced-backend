@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
@@ -66,6 +65,11 @@ class AudicoEnhancedSystem {
             formatStats: {},
             startTime: new Date().toISOString()
         };
+
+        // Auto-initialize
+        this.initialize().catch(error => {
+            console.error('Auto-initialization failed:', error);
+        });
     }
 
     /**
@@ -101,7 +105,13 @@ class AudicoEnhancedSystem {
 
         } catch (error) {
             console.error('❌ System initialization failed:', error);
-            throw new Error(`System initialization failed: ${error.message}`);
+            this.isInitialized = false;
+            // Don't throw error - allow system to work in degraded mode
+            return {
+                success: false,
+                message: 'System initialization failed',
+                error: error.message
+            };
         }
     }
 
@@ -213,12 +223,191 @@ class AudicoEnhancedSystem {
     }
 
     /**
+     * ========================================================================
+     * FIXED METHODS - These were missing and causing server crashes
+     * ========================================================================
+     */
+
+    /**
+     * Check if system is healthy and ready
+     */
+    isHealthy() {
+        return this.isInitialized && 
+               this.documentProcessor && 
+               this.layoutDetector && 
+               this.priceExtractor && 
+               this.templateManager;
+    }
+
+    /**
+     * Get system health information
+     */
+    async getSystemHealth() {
+        try {
+            const health = await this.healthCheck();
+            return {
+                status: health.status,
+                initialized: this.isInitialized,
+                components: health.components,
+                issues: health.issues,
+                timestamp: health.timestamp
+            };
+        } catch (error) {
+            return {
+                status: 'unhealthy',
+                initialized: this.isInitialized,
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
+        }
+    }
+
+    /**
+     * Get detailed system status
+     */
+    async getDetailedStatus() {
+        try {
+            const health = await this.getSystemHealth();
+            const stats = this.getSystemStats();
+            const capabilities = this.getSystemCapabilities();
+
+            return {
+                ...health,
+                statistics: stats,
+                capabilities: capabilities,
+                activeJobs: Array.from(this.activeJobs.values()),
+                configuration: {
+                    enableMultiAgent: this.config.enableMultiAgent,
+                    enableFallback: this.config.enableFallback,
+                    enableLearning: this.config.enableLearning,
+                    maxConcurrentJobs: this.config.maxConcurrentJobs,
+                    confidenceThreshold: this.config.confidenceThreshold
+                }
+            };
+        } catch (error) {
+            return {
+                status: 'error',
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
+        }
+    }
+
+    /**
+     * Process file (alias for processDocument for compatibility)
+     */
+    async processFile(options) {
+        if (options.fileBuffer && options.filename && options.supplier) {
+            return await this.processDocument(
+                options.fileBuffer,
+                options.filename,
+                options.supplier,
+                options.options || {}
+            );
+        } else {
+            throw new Error('Invalid processFile parameters. Expected: fileBuffer, filename, supplier, options');
+        }
+    }
+
+    /**
+     * Process file asynchronously
+     */
+    async processFileAsync(jobId, options) {
+        try {
+            // Store the job for tracking
+            const job = {
+                id: jobId,
+                status: 'processing',
+                startTime: Date.now(),
+                options: options
+            };
+
+            this.activeJobs.set(jobId, job);
+
+            // Process in background
+            setTimeout(async () => {
+                try {
+                    const result = await this.processFile(options);
+                    job.status = 'completed';
+                    job.result = result;
+                    job.completedAt = Date.now();
+                } catch (error) {
+                    job.status = 'failed';
+                    job.error = error.message;
+                    job.completedAt = Date.now();
+                }
+            }, 0);
+
+            return {
+                jobId: jobId,
+                status: 'started',
+                message: 'Processing started'
+            };
+
+        } catch (error) {
+            throw new Error(`Async processing failed: ${error.message}`);
+        }
+    }
+
+    /**
+     * Get job status by ID
+     */
+    async getJobStatus(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) {
+            return null;
+        }
+
+        return {
+            id: job.id,
+            status: job.status,
+            startTime: job.startTime,
+            completedAt: job.completedAt,
+            processingTime: job.completedAt ? (job.completedAt - job.startTime) : (Date.now() - job.startTime),
+            result: job.result,
+            error: job.error
+        };
+    }
+
+    /**
+     * Get all jobs (with optional filtering)
+     */
+    async getJobs(filters = {}) {
+        const jobs = Array.from(this.activeJobs.values());
+
+        if (filters.status) {
+            return jobs.filter(job => job.status === filters.status);
+        }
+
+        if (filters.limit) {
+            return jobs.slice(0, parseInt(filters.limit));
+        }
+
+        return jobs;
+    }
+
+    /**
+     * Get system statistics
+     */
+    getSystemStatistics() {
+        return this.getSystemStats();
+    }
+
+    /**
+     * ========================================================================
+     * END OF FIXED METHODS
+     * ========================================================================
+     */
+
+    /**
      * Main processing entry point
      */
     async processDocument(fileBuffer, filename, supplier, options = {}) {
         try {
             if (!this.isInitialized) {
-                throw new Error('System not initialized. Call initialize() first.');
+                console.warn('System not fully initialized, attempting basic processing...');
+                // Try basic processing instead of throwing error
+                return await this.fallbackToLegacyProcessing(fileBuffer, filename, supplier, options);
             }
 
             const jobId = this.generateJobId();
@@ -436,7 +625,7 @@ class AudicoEnhancedSystem {
         // Apply pricing logic
         products = this.legacyApplyPricingLogic(products, options);
 
-        return { products: products };
+        return { products: products, success: true };
     }
 
     /**
@@ -454,12 +643,13 @@ class AudicoEnhancedSystem {
         };
 
         // Try with generic template
-        const genericTemplate = await this.templateManager.findBestTemplate('generic', {
-            type: 'generic',
-            subtype: 'simple',
-            confidence: 0.5,
-            characteristics: {}
-        });
+        const genericTemplate = this.templateManager ? 
+            await this.templateManager.findBestTemplate('generic', {
+                type: 'generic',
+                subtype: 'simple',
+                confidence: 0.5,
+                characteristics: {}
+            }) : null;
 
         return await this.documentProcessor.processDocument(
             fileBuffer, 
@@ -559,15 +749,15 @@ class AudicoEnhancedSystem {
         const stats = { ...this.systemStats };
 
         // Add processor-specific stats
-        if (this.layoutDetector) {
+        if (this.layoutDetector && typeof this.layoutDetector.getStats === 'function') {
             stats.layoutDetector = this.layoutDetector.getStats();
         }
 
-        if (this.priceExtractor) {
+        if (this.priceExtractor && typeof this.priceExtractor.getStats === 'function') {
             stats.priceExtractor = this.priceExtractor.getStats();
         }
 
-        if (this.templateManager) {
+        if (this.templateManager && typeof this.templateManager.getStats === 'function') {
             stats.templateManager = this.templateManager.getStats();
         }
 
@@ -800,7 +990,13 @@ class AudicoEnhancedSystem {
         const lines = text.split('\n').filter(line => line.trim().length > 0);
 
         for (const line of lines) {
-            const priceMatch = line.match(/R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
+            // Enhanced price detection - prioritize "New RRP"
+            const newRRPMatch = line.match(/New\s+RRP[:\s]*R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i);
+            const oldRRPMatch = line.match(/Old\s+RRP[:\s]*R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i);
+            const generalPriceMatch = line.match(/R\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
+
+            let priceMatch = newRRPMatch || oldRRPMatch || generalPriceMatch;
+
             if (priceMatch) {
                 const productName = line.substring(0, line.indexOf(priceMatch[0])).trim();
                 if (productName.length > 5) {
@@ -811,6 +1007,7 @@ class AudicoEnhancedSystem {
                         supplier: supplier,
                         description: productName,
                         category: 'uncategorized',
+                        priceType: newRRPMatch ? 'New RRP' : (oldRRPMatch ? 'Old RRP' : 'Standard'),
                         extractionMethod: 'legacy_pdf'
                     });
                 }
@@ -829,12 +1026,54 @@ class AudicoEnhancedSystem {
 
             if (data.length < 2) continue;
 
-            for (let i = 1; i < data.length; i++) {
+            // Find header row
+            let headerRow = 0;
+            for (let i = 0; i < Math.min(5, data.length); i++) {
+                const row = data[i];
+                if (row.some(cell => 
+                    typeof cell === 'string' && 
+                    (cell.toLowerCase().includes('product') || 
+                     cell.toLowerCase().includes('name') || 
+                     cell.toLowerCase().includes('description'))
+                )) {
+                    headerRow = i;
+                    break;
+                }
+            }
+
+            const headers = data[headerRow] || [];
+
+            // Find column indices with priority for "New RRP"
+            const nameCol = headers.findIndex(h => 
+                typeof h === 'string' && 
+                (h.toLowerCase().includes('product') || 
+                 h.toLowerCase().includes('name') || 
+                 h.toLowerCase().includes('description'))
+            );
+
+            const newRRPCol = headers.findIndex(h => 
+                typeof h === 'string' && h.toLowerCase().includes('new') && h.toLowerCase().includes('rrp')
+            );
+
+            const oldRRPCol = headers.findIndex(h => 
+                typeof h === 'string' && h.toLowerCase().includes('old') && h.toLowerCase().includes('rrp')
+            );
+
+            const priceCol = headers.findIndex(h => 
+                typeof h === 'string' && 
+                (h.toLowerCase().includes('price') || h.toLowerCase().includes('rrp'))
+            );
+
+            // Prioritize New RRP over Old RRP over general price
+            const selectedPriceCol = newRRPCol >= 0 ? newRRPCol : (oldRRPCol >= 0 ? oldRRPCol : priceCol);
+
+            // Parse data rows
+            for (let i = headerRow + 1; i < data.length; i++) {
                 const row = data[i];
                 if (!row || row.length === 0) continue;
 
-                const name = row[0];
-                const price = row[1];
+                const name = nameCol >= 0 ? row[nameCol] : row[0];
+                const price = selectedPriceCol >= 0 ? row[selectedPriceCol] : row[1];
 
                 if (name && price && typeof name === 'string' && name.length > 2) {
                     const numericPrice = typeof price === 'number' ? price : parseFloat(String(price).replace(/[^0-9.]/g, ''));
@@ -846,6 +1085,8 @@ class AudicoEnhancedSystem {
                             supplier: supplier,
                             description: name.trim(),
                             category: 'uncategorized',
+                            priceType: newRRPCol >= 0 ? 'New RRP' : (oldRRPCol >= 0 ? 'Old RRP' : 'Standard'),
+                            sheet: sheetName,
                             extractionMethod: 'legacy_excel'
                         });
                     }
